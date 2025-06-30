@@ -1,4 +1,11 @@
-from app import app
+from fastapi import FastAPI
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+app = FastAPI()
+
+@app.get("/")
+def read_root():
+    return {"message": "Arisyn backend running 🚀"}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=5000)
