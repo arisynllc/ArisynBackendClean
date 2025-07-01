@@ -98,7 +98,15 @@ The application follows a modular architecture with separate classes handling di
 
 Preferred communication style: Simple, everyday language.
 
+## Recent Changes
+
+Recent Changes:
+- July 1, 2025: Fixed critical startup issue by converting FastAPI to Flask architecture
+- July 1, 2025: Successfully integrated VocalAnalyzer, ArtistMatcher, and FXChainGenerator modules
+- July 1, 2025: Validated full API functionality with test requests
+
 ## Changelog
 
 Changelog:
-- June 30, 2025. Initial setup
+- July 1, 2025: Application successfully converted to Flask and running
+- June 30, 2025: Initial setup
