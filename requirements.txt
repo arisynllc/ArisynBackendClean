@@ -3,8 +3,3 @@ uvicorn
 pydub
 supabase
 python-multipart
-fastapi
-pydub
-python-multipart
-supabase
-uvicorn
