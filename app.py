@@ -55,6 +55,7 @@ def health():
 @app.route("/analyze", methods=["POST"])
 def analyze():
     """Main vocal analysis endpoint"""
+    file_path = None
     try:
         # Check if file is present
         if 'file' not in request.files:
@@ -62,7 +63,7 @@ def analyze():
         
         file = request.files['file']
         
-        if file.filename == '':
+        if file.filename == '' or file.filename is None:
             return jsonify({"error": "No file selected"}), 400
         
         if not file or not allowed_file(file.filename):
@@ -111,7 +112,7 @@ def analyze():
     except Exception as e:
         app.logger.error(f"Analysis error: {str(e)}")
         # Clean up file if it exists
-        if 'file_path' in locals() and os.path.exists(file_path):
+        if file_path and os.path.exists(file_path):
             os.remove(file_path)
         
         return jsonify({
