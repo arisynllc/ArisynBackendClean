@@ -1,30 +1,36 @@
 from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import FileResponse
-from pydub import AudioSegment
+from fastapi.middleware.cors import CORSMiddleware
 import os
 
 app = FastAPI()
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/")
+async def root():
+    return {"message": "Arisyn backend running fine 🚀"}
+
 @app.post("/analyze")
 async def analyze(file: UploadFile = File(...)):
-    # Save the uploaded file
-    file_location = f"temp_{file.filename}"
-    with open(file_location, "wb+") as file_object:
-        file_object.write(await file.read())
+    # Save file
+    contents = await file.read()
+    file_path = f"temp_{file.filename}"
+    with open(file_path, "wb") as f:
+        f.write(contents)
 
-    # Process audio (only file manipulation, no playback)
-    audio = AudioSegment.from_file(file_location)
+    # Here you would do audio analysis logic
+    result = {"vocal_chain": "Simulated FX settings example"}
 
-    # Example FX: simple gain boost
-    audio = audio + 3  # +3 dB gain
+    # Clean up file
+    os.remove(file_path)
+    return result
 
-    # Example EQ simulation (skip real EQ to avoid pyaudioop)
-    # You can describe EQ changes in metadata if needed
-
-    processed_file_name = f"processed_{file.filename}"
-    audio.export(processed_file_name, format="wav")
-
-    # Remove the temp uploaded file
-    os.remove(file_location)
-
-    return FileResponse(path=processed_file_name, filename=processed_file_name, media_type='audio/wav')
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=5000)
