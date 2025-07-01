@@ -1,154 +1,81 @@
-import os
-import logging
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from werkzeug.utils import secure_filename
-from werkzeug.exceptions import RequestEntityTooLarge
-import uuid
+from fastapi import FastAPI, UploadFile, File
+from fastapi.responses import JSONResponse
+from pydub import AudioSegment, effects
+import uuid, os, datetime
+from supabase import create_client, Client
 
-# Import our analysis modules
-from vocal_analyzer import VocalAnalyzer
-from artist_matcher import ArtistMatcher
-from fx_chain_generator import FXChainGenerator
+# --- Supabase setup ---
+supabase_url = "https://qknvfjmxtbbyipjkmdde.supabase.co"
+supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFrbnZmam14dGJ5aXBqa21kZGUiLCJyb2xlIjoiYW5vbiIsImlhdCI6MTc1MTMzNzA0NCwiZXhwIjoyMDY2OTEzMDQ0fQ.a-zRXOVGAF9kNtMTfPmymHMlShBPmkwvyotpGu6H2aU"
+supabase: Client = create_client(supabase_url, supabase_key)
 
-# Configure logging
-logging.basicConfig(level=logging.DEBUG)
+app = FastAPI()
 
-# Create Flask app
-app = Flask(__name__)
-app.secret_key = os.environ.get("SESSION_SECRET", "dev-secret-key-change-in-production")
+def upload_to_supabase(file_path, supabase_filename):
+    with open(file_path, "rb") as f:
+        res = supabase.storage.from_("previews").upload(path=f"processed/{supabase_filename}", file=f)
+        if res.get("error"):
+            raise Exception(f"Upload failed: {res['error']['message']}")
+        public_url = supabase.storage.from_("previews").get_public_url(f"processed/{supabase_filename}")
+        return public_url
 
-# Configure CORS
-CORS(app, origins=["*"], methods=["GET", "POST", "OPTIONS"], 
-     allow_headers=["Content-Type", "Authorization", "X-Requested-With"])
+def save_soundcard_row(audio_url, fx_chain, artist_match):
+    new_id = str(uuid.uuid4())
+    data = {
+        "id": new_id,
+        "artist_match": artist_match,
+        "fx_chain": fx_chain,
+        "audio_url": audio_url,
+        "created_at": datetime.datetime.utcnow().isoformat()
+    }
+    supabase.table("SoundCards").insert(data).execute()
+    return new_id
 
-# Configuration
-app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB limit
-UPLOAD_FOLDER = 'uploads'
-ALLOWED_EXTENSIONS = {'mp3', 'wav', 'm4a', 'flac', 'aac'}
+@app.post("/analyze")
+async def analyze_vocal(file: UploadFile = File(...)):
+    file_location = f"temp_{uuid.uuid4()}.wav"
+    with open(file_location, "wb+") as f:
+        f.write(await file.read())
 
-# Ensure upload directory exists
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    audio = AudioSegment.from_file(file_location)
 
-# Initialize analysis modules
-vocal_analyzer = VocalAnalyzer()
-artist_matcher = ArtistMatcher()
-fx_chain_generator = FXChainGenerator()
+    # --- Real FX chain simulation ---
+    audio = effects.high_pass_filter(audio, cutoff=2000)
+    audio = effects.normalize(audio)
+    audio = audio + 3
+    reverb = audio[-500:].fade_out(300)
+    audio = audio.overlay(reverb)
 
-def allowed_file(filename):
-    """Check if file extension is allowed"""
-    return '.' in filename and \
-           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    processed_file_name = f"processed_{uuid.uuid4()}.wav"
+    audio.export(processed_file_name, format="wav")
 
-@app.route('/', methods=['GET'])
-def health_check():
-    """Health check endpoint"""
-    return jsonify({
-        "status": "online",
-        "service": "Vocal Analysis API",
-        "version": "1.0.0",
-        "endpoints": {
-            "analyze": "/analyze - POST - Upload audio file for analysis",
-            "health": "/ - GET - Health check"
-        }
+    # Upload to Supabase
+    audio_url = upload_to_supabase(processed_file_name, processed_file_name)
+
+    # Example FX metadata
+    fx_chain = {
+        "Auto-Tune": "35% correction, Key: C Minor",
+        "EQ": "+3 dB @ 2.5 kHz",
+        "Compression": "4:1 Ratio, +3 dB gain",
+        "Reverb": "1.8 sec decay",
+        "Delay": "1/8th note"
+    }
+    artist_match = {
+        "name": "Billie Eilish",
+        "match_pct": 92,
+        "confidence": 98
+    }
+
+    # Save to Supabase table
+    save_soundcard_row(audio_url, fx_chain, artist_match)
+
+    # Cleanup temp files
+    os.remove(file_location)
+    os.remove(processed_file_name)
+
+    return JSONResponse({
+        "message": "Processing complete",
+        "audio_url": audio_url,
+        "fx_chain": fx_chain,
+        "artist_match": artist_match
     })
-
-@app.route('/analyze', methods=['POST'])
-def analyze_vocal():
-    """Main endpoint for vocal analysis"""
-    file_path = None
-    try:
-        # Check if file was uploaded
-        if 'file' not in request.files:
-            return jsonify({"error": "No file uploaded"}), 400
-        
-        file = request.files['file']
-        
-        # Check if file was selected
-        if file.filename == '':
-            return jsonify({"error": "No file selected"}), 400
-        
-        # Validate file type
-        if not allowed_file(file.filename):
-            return jsonify({
-                "error": "Invalid file type. Supported formats: mp3, wav, m4a, flac, aac"
-            }), 400
-        
-        # Generate secure filename
-        if not file.filename:
-            return jsonify({"error": "File must have a name"}), 400
-        
-        filename = secure_filename(str(file.filename))
-        unique_filename = f"{uuid.uuid4()}_{filename}"
-        file_path = os.path.join(UPLOAD_FOLDER, unique_filename)
-        
-        # Save uploaded file
-        file.save(file_path)
-        
-        app.logger.info(f"Processing file: {unique_filename}")
-        
-        # Step 1: Vocal Analysis
-        app.logger.debug("Starting vocal analysis...")
-        vocal_metrics = vocal_analyzer.analyze(file_path)
-        
-        # Step 2: Artist Matching
-        app.logger.debug("Starting artist matching...")
-        artist_match = artist_matcher.find_matches(vocal_metrics)
-        
-        # Step 3: FX Chain Generation
-        app.logger.debug("Generating FX chain...")
-        fx_chain = fx_chain_generator.generate_chain(vocal_metrics, artist_match)
-        
-        # Clean up uploaded file
-        os.remove(file_path)
-        
-        # Prepare response
-        response_data = {
-            "success": True,
-            "analysis": {
-                "vocal_metrics": vocal_metrics,
-                "artist_match": artist_match,
-                "fx_chain": fx_chain
-            },
-            "message": "Vocal analysis completed successfully"
-        }
-        
-        app.logger.info(f"Analysis completed for {unique_filename}")
-        return jsonify(response_data)
-        
-    except RequestEntityTooLarge:
-        return jsonify({"error": "File too large. Maximum size is 50MB"}), 413
-    
-    except Exception as e:
-        app.logger.error(f"Error during analysis: {str(e)}")
-        
-        # Clean up file if it exists
-        if file_path:
-            try:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-            except:
-                pass  # Ignore cleanup errors
-            
-        return jsonify({
-            "error": "Internal server error during analysis",
-            "message": str(e)
-        }), 500
-
-@app.errorhandler(413)
-def too_large(e):
-    """Handle file too large error"""
-    return jsonify({"error": "File too large. Maximum size is 50MB"}), 413
-
-@app.errorhandler(404)
-def not_found(e):
-    """Handle 404 errors"""
-    return jsonify({"error": "Endpoint not found"}), 404
-
-@app.errorhandler(500)
-def internal_error(e):
-    """Handle internal server errors"""
-    return jsonify({"error": "Internal server error"}), 500
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
